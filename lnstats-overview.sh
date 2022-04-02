@@ -1,8 +1,17 @@
 #! /usr/bin/env -S bash -e
-
-if ! which lncli > /dev/null; then
-    echo -e "\nPlease make sure 'lncli' is in your \$PATH. Exiting!"
-    exit 1
+#checking OS
+LNCLI="$lncli"
+if uname -a | grep umbrel > /dev/null; then
+    LNCLI="docker exec -i lnd lncli"
+    dependencies="cat jq lncli"
+elif uname -a | grep citadel > /dev/null; then
+        LNCLI="docker exec -i lightning lncli"
+    dependencies="cat jq lncli"
+elif ! which lncli > /dev/null; then
+    echo -e "\nPlease make sure 'lncli' is in your \$PATH. Exiting!"    exit 1
+else
+    LNCLI="lncli"
+    dependencies="lncli"
 fi
 
 MINIMUM_TX_SIZE=109 # in virtual bytes, assuming no change output
@@ -90,20 +99,29 @@ compactSats() {
 
 echo -e "\nTalking to lnd, this will take a few seconds ...\n"
 
-payments=$(lncli listpayments --max_payments 9999 | \
+payments=$($LNCLI listpayments --max_payments 9999 | \
     jq -r '[.payments[] | select(.status == "SUCCEEDED")]')
-onchainFees=$(lncli listchaintxns | jq -r '.transactions | map(.total_fees | tonumber) | add')
+onchainFees=$($LNCLI listchaintxns | jq -r '.transactions | map(.total_fees | tonumber) | add')
 paymentAmount=$(echo "$payments" | jq -r length)
 totalFeesPaid=$(echo "$payments" | jq -r '. | map(.fee_sat | tonumber) | add')
-totalFeesEarned=$(("$(lncli fwdinghistory --max_events 10000 --start_time "-10y" | \
+totalFeesEarned=$(("$($LNCLI fwdinghistory --max_events 10000 --start_time "-10y" | \
     jq -r '.forwarding_events | map(.fee_msat | tonumber) | add')" / ONETHOUSAND))
-initiatedChansOpen=$(lncli listchannels | jq -r '[.channels[] | select(.initiator == true)]' | \
+initiatedChannelsOpen=$($LNCLI listchannels | jq -r '[.channels[] | select(.initiator == true)]' | \
     jq -r length)
-initiatedChansDead=$(lncli closedchannels | \
+initiatedChannelsClosed=$($LNCLI closedchannels | \
     jq -r '[.channels[] | select(.open_initiator == "INITIATOR_LOCAL")]' | \
     jq -r length)
-initiatedChans=$((initiatedChansOpen + initiatedChansDead))
-onchainTx=$((initiatedChansOpen + initiatedChansDead * 2))
+activeChannels=$($LNCLI listchannels | jq -r '[.channels[] | select(.active == true)]' | \
+    jq -r length)
+inactiveChannels=$($LNCLI listchannels | jq -r '[.channels[] | select(.active == false)]' | \
+    jq -r length)
+privateChannels=$($LNCLI listchannels | jq -r '[.channels[] | select(.private == true)]' | \
+    jq -r length)
+publicChannels=$($LNCLI listchannels | jq -r '[.channels[] | select(.private == false)]' | \
+    jq -r length)
+totalChannels=$((activeChannels + inactiveChannels))
+initiatedChannels=$((initiatedChannelsOpen + initiatedChannelsClosed))
+onchainTx=$((initiatedChannelsOpen + initiatedChannelsClosed * 2))
 txPerOnchainTx=$(printf "%.0f\n" "$(bc <<< "scale = 2; ${paymentAmount}/${onchainTx}")")
 minimumSpaceUsed=$((MINIMUM_TX_SIZE_CHANNEL_OPENING * onchainTx))
 minimumSpaceSaved=$((MINIMUM_TX_SIZE * paymentAmount - minimumSpaceUsed))
@@ -125,8 +143,12 @@ minimumFeesSaved=$(compactSats "$minimumFeesSaved")
 onchainFees=$(compactSats "$onchainFees")
 balance=$(compactSats "$balance")
 
-echo -e "• You opened ${GREEN}${initiatedChans} channels${NC}, out of which" \
-        "${RED}${initiatedChansDead} are now closed${NC}, and you made" \
+
+echo -e "• You have $publicChannels public and $privateChannels private channels." \
+        "Out of which $activeChannels are active and $inactiveChannels are inactive." \
+        "In total you have $totalChannels Channels."
+echo -e "• You opened ${GREEN}${initiatedChannels} channels${NC}, out of which" \
+        "${RED}${initiatedChannelsClosed} are now closed${NC}, and you made" \
         "${ORANGE}${paymentAmount} Lightning payments${NC}, which implies" \
         "${ORANGE}${txPerOnchainTx} payments${NC} per on-chain transaction."
 echo -e "• You used at least ${RED}${minimumSpaceUsed}${NC} block space," \
