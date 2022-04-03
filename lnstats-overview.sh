@@ -3,10 +3,10 @@
 LNCLI="$lncli"
 if uname -a | grep umbrel > /dev/null; then
     LNCLI="docker exec -i lnd lncli"
-    dependencies="cat jq lncli"
+    dependencies="cat jq"
 elif uname -a | grep citadel > /dev/null; then
         LNCLI="docker exec -i lightning lncli"
-    dependencies="cat jq lncli"
+    dependencies="cat jq"
 elif ! which lncli > /dev/null; then
     echo -e "\nPlease make sure 'lncli' is in your \$PATH. Exiting!"    exit 1
 else
